@@ -1,0 +1,488 @@
+---
+title: <center>Optimización de recursos para pacientes diabéticos en hospitales de
+  EEUU</center>
+author: "Sergio Carracedo Huroz"
+date: "26 Mayo - 10 Junio de 2025"
+output:
+  rmdformats::readthedown:
+    toc_depth: 5
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 3
+    toc_float: true
+    theme: yeti
+    number_sections: false
+subtitle: "<center>M2.859 - Visualización de Datos - Práctica II - UOC<br>Sergio Carracedo
+  Huroz - Aula 3</center>"
+number_sections: false
+header-includes: \usepackage{float} \floatplacement{figure}{H} \usepackage{hyperref}
+  \usepackage{fancyhdr}
+lang: en
+runtime: shiny
+bibliography: VD_PRAC_II.bib
+csl: "biomed-central.csl.txt"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE,
+                      cache = FALSE,
+                      comment = NA)
+```
+
+```{r librerias, include=FALSE}
+
+if(!require(pacman)){
+  install.packages("pacman")
+}
+
+pacman::p_load(
+  ggplot2,
+  ggstatsplot,
+  tidyverse,
+  viridis,
+  plotly,
+  shiny,
+  qicharts2,
+  GGally,
+  corrplot,
+  vcdExtra,
+  rcompanion,
+  reshape2
+)
+Sys.setlocale("LC_CTYPE", "en_US.UTF-8")
+# Establecer la ubicacion de .Rmd como directorio de trabajo en local
+# setwd(dirname(rstudioapi::getSourceEditorContext()$path))
+```
+
+```{r css_ui, echo=FALSE, results='asis'}
+htmltools::tags$style(HTML("
+  #edad .shiny-options-group {
+    column-count: 2;
+    column-gap: 1em;
+  }
+
+  #edad .checkbox {
+    break-inside: avoid-column;
+    padding-bottom: 5px;
+  }
+
+  #edad label.control-label {
+    display: block;
+    margin-bottom: 10px;
+  }
+"))
+```
+
+```{r dataset, echo=FALSE}
+
+# setwd("I:\\Mi unidad\\Master_Ciencia_Datos_UOC\\.Semestre_5 Feb-Jul-2025_Visualizacion_de_datos\\Practica II")
+
+# Variables innecesarias para la práctica II
+vars_to_remove =   c(# categoricas:
+                     'fecha_ingreso', 'state', 'admission_type_id', 'discharge_disposition_id',
+                     'admission_source_id', 'payer_code', 'diag_1', 'diag_2', 'diag_3', 'readmitted',
+
+                     #numericas:
+                     'encounter_id', 'patient_nbr',
+                     'num_lab_procedures','num_procedures','num_medications' )
+
+# Preparar conjunto de datos descrito en la práctica I
+df1 = readRDS("datos_preparados.RDS") |>
+  mutate(anio_ingreso = year(fecha_ingreso),
+         gender = as.factor(gender),
+         race = as.factor(race),
+         change = as.factor(if_else(change == "Ch","Yes",change)),
+         diabetesMed = as.factor(diabetesMed)) |>
+  filter(gender %in% c("Male","Female")) |>
+  mutate(gender = as.factor(as.character(gender))) |>
+  group_by(patient_nbr) |>
+  arrange(encounter_id) |>
+  filter(encounter_id==last(encounter_id)) |>
+  ungroup()|>
+  select(-all_of(vars_to_remove))
+
+
+vars_numeric <- df1 |> 
+  select(where(is.numeric) | where(is.integer)) |> 
+  colnames()
+
+vars_categorica = df1 |> 
+  select(where(~ !is.numeric(.))) |>  
+  colnames()
+
+df1 = df1 |>
+  mutate(across(all_of(vars_categorica), as.factor),
+         across(all_of(c("readmitted_logical","special_monitoring")), as.logical),
+         ) 
+
+
+
+```
+
+## Filtraje de datos: ¿Qué pacientes desea analizar?
+
+```{r filtros}
+fluidRow(
+
+  column(3,
+         
+         # Filtro por tipo de paciente
+         checkboxGroupInput("tipoPaciente",
+                            "Filtrar por tipo de paciente:",
+                            choices = c(
+                              "Monitorización especial" = "special_monitoring",
+                              "Readmitidos" = "readmitted_logical"
+                            ),
+                            selected = character(0)),
+         
+         # Filtro por genero
+          checkboxGroupInput("genero",
+                            "Filtrar por género:",
+                            choices = c("Hombre" = "Male",
+                                        "Mujer" = "Female"),
+                            selected = unique(df1$gender)),
+         
+         # Reseteo de filtros
+         actionButton("reset_btn", "Resetear filtros")
+
+
+
+  ),
+
+   column(3,
+          
+          #Filtro por raza
+          checkboxGroupInput("raza",
+                            "Filtrar por raza:",
+                            choices = c("Caucásica" = "Caucasian",
+                                        "Afroamericana" = "AfricanAmerican",
+                                        "Asiática"  = "Asian",
+                                        "Hispana" =   "Hispanic",
+                                        "Otra" =   "Other"),
+                            selected = unique(df1$race))
+
+
+          ),
+
+  column(5,
+
+
+      # Filtro por edad
+      htmltools::div(
+                class = "multi-column-checkbox",
+                checkboxGroupInput("edad",
+                                    "Filtrar por rango de edad:",
+                                    choices = sort(unique(df1$age)),
+                                    selected = sort(unique(df1$age))
+            )
+          )
+
+  )
+)
+
+
+```
+
+#   1. Evolución del número y tipo de ingresos
+
+```{r ui_lineplot, fig.height=10}
+#Desglose de datos por categoría de variable seleccionada
+selectInput("generoRazaEdad",
+            "Desglose de datos:",
+            choices = c(
+              "Sin desglose",
+              "Por raza" = "race",
+              "Por género" = "gender",
+              "Por rango de edad" = "age"
+            ),
+            selected = "Sin desglose")
+
+plotlyOutput("lineplot", height = "500px")
+
+```
+
+```{r server_lineplot }
+
+# Server
+# Resetear inputs
+observeEvent(input$reset_btn, {
+  # updateRadioButtons(session, "generoRazaEdad", selected = "Sin desglose")
+  updateCheckboxGroupInput(session, "tipoPaciente", selected = character(0))
+  updateCheckboxGroupInput(session, "genero", selected = unique(df1$gender))
+  updateCheckboxGroupInput(session, "raza", selected = c('Caucasian',
+                                                          'AfricanAmerican',
+                                                          'Asian',
+                                                          'Hispanic',
+                                                          'Other'))
+  updateCheckboxGroupInput(session, "edad", selected = sort(unique(df1$age)))
+
+})
+
+
+output$lineplot <- renderPlotly({
+
+  req(input$generoRazaEdad)
+
+  if (input$generoRazaEdad == "Sin desglose") {
+    df_counts <- df1 %>%
+      filter(
+        (if("special_monitoring" %in% input$tipoPaciente) special_monitoring else TRUE),
+         (if("readmitted_logical" %in% input$tipoPaciente) readmitted_logical else TRUE),
+             race %in% input$raza,
+             age %in% input$edad,
+             gender %in% input$genero
+        ) |>
+      count(anio_ingreso) %>%
+      mutate(
+        tooltip_text = paste0(
+          "Año: ", anio_ingreso,
+          "<br>Ingresos: ", n
+        )
+      ) |>
+      arrange(anio_ingreso)
+
+    if(nrow(df1) > 0){
+    p <- ggplot(df_counts,
+                aes(x = as.numeric(anio_ingreso),
+                    y = n,
+                    group = 1,
+                    text = tooltip_text)) +
+      geom_line(color = "#2E86AB") +
+      geom_point(color = "#2E86AB") +  # fixed color
+      labs(
+        title = "Número de ingresos Sin desglose por año",
+        subtitle = "1999 - 2008",
+        x = "Año de ingreso",
+        y = "Número de ingresos"
+      ) +
+      theme_minimal() +
+      theme(
+        axis.title.x = element_text(size = 12, face = "bold"),
+        axis.title.y = element_text(size = 12, face = "bold"),
+        plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+        plot.subtitle = element_text(size = 12, face = "bold", hjust = 0.5)
+      )
+    }
+
+  } else {
+    var_sym <- rlang::sym(input$generoRazaEdad)
+    var_label <- ifelse(input$generoRazaEdad == "race", "Raza",
+                        ifelse(input$generoRazaEdad == "gender", "Género", "Rango de edad"))
+
+    df_counts <- df1 %>%
+      filter(
+        (if("special_monitoring" %in% input$tipoPaciente) special_monitoring else TRUE),
+         (if("readmitted_logical" %in% input$tipoPaciente) readmitted_logical else TRUE),
+             race %in% input$raza,
+             age %in% input$edad,
+             gender %in% input$genero
+        ) |>
+      drop_na(anio_ingreso, !!var_sym) %>%
+      count(anio_ingreso, !!var_sym, name = "count") %>%
+      mutate(tooltip_text = paste0(
+        var_label, ": ", as.character(!!var_sym),
+        "<br>Año: ", anio_ingreso,
+        "<br>Ingresos: ", count
+      ))
+
+    if(nrow(df1) > 0){
+
+      p <- ggplot(df_counts,
+                  aes(x = anio_ingreso,
+                      y = count,
+                      group = !!var_sym,
+                      color = !!var_sym,
+                      text = tooltip_text)) +
+        geom_line() +
+        geom_point() +
+        scale_color_viridis_d(name = var_label) +
+        labs(
+          title = paste0("Número de ingresos por ",
+                         ifelse(input$generoRazaEdad == "race", "raza",
+                                ifelse(input$generoRazaEdad == "gender", "género",
+                                       "rango de edad"))),
+          subtitle = "1999 - 2008",
+          x = "Año de ingreso",
+          y = "Número de ingresos"
+        ) +
+        theme_minimal() +
+        theme(
+          axis.title.x = element_text(size = 12, face = "bold"),
+          axis.title.y = element_text(size = 12, face = "bold"),
+          plot.title = element_text(size = 16, face = "bold", hjust = 0.5),
+          plot.subtitle = element_text(size = 12, face = "bold", hjust = 0.5)
+        )
+    }
+  }
+ if(nrow(df1) > 0){
+  ggplotly(p, tooltip = "text") %>%
+    layout(
+      title = list(
+        text = paste0("Número de ingresos ",
+                      ifelse(input$generoRazaEdad == "race", "por raza",
+                             ifelse(input$generoRazaEdad == "gender", "por género",
+                                    ifelse(input$generoRazaEdad == "age", "por rango de edad", "totales")))),
+        x = 0.5,
+        xanchor = "center",
+        yanchor = "top",
+        font = list(
+                    family = "Arial Black",
+                    size = 20,
+                    color = "black"
+                  )
+      ),
+      margin = list(t = 100)
+    )
+ }
+})
+
+
+```
+
+$$
+~
+$$
+
+# 2. Predicción del tiempo de ingreso según variable
+
+```{r ui_boxplot_scatter}
+
+# UI
+selectInput("vars",
+            "Selecciona variable:",
+            choices = sort(df1 |> 
+                             dplyr::select(-time_in_hospital) |> 
+                             colnames()),
+            selected = "age")
+
+plotlyOutput("correlacion", height = "500px")
+
+```
+
+```{r server_boxplot_scatter, r}
+
+#SERVER
+
+output$correlacion = renderPlotly({
+  
+  req(input$vars)
+  
+  if(input$vars %in% vars_categorica){
+    df3 = df1 |> 
+             filter(
+                  (if("special_monitoring" %in% input$tipoPaciente) special_monitoring else TRUE),
+                   (if("readmitted_logical" %in% input$tipoPaciente) readmitted_logical else TRUE),
+                       race %in% input$raza,
+                       age %in% input$edad,
+                       gender %in% input$genero
+                  ) |> 
+            rename(temp = input$vars) |> 
+            drop_na(time_in_hospital, temp) |> 
+            group_by(temp)  |> 
+            filter(n() >= 2)  |> 
+            mutate(mean_temp = round(mean(time_in_hospital,
+                                           na.rm = TRUE), 1)) |>
+            ungroup()
+    
+  p = ggplotly(ggplot(df3,
+              aes(x = temp,
+                  y = time_in_hospital,
+                  fill = temp,
+                  text = paste0(
+                    input$vars, ": ", temp,
+                    "<br>Promedio días ingesado: ", mean_temp))) +
+        geom_violin(trim = FALSE, 
+                    alpha = 0.6,
+                    color = "gray30") +
+        geom_boxplot(width = 0.1, outlier.shape = NA, color = "black", alpha = 0.7) +
+        stat_summary(fun = mean, geom = "point", shape = 20, size = 3, color = "red") +
+        labs(
+          x = input$vars,
+          y = "Días ingresado",
+          fill = input$vars
+        ) +
+        theme_minimal() +
+            theme(
+              axis.title.x = element_text(size = 12, face = "bold"),
+              axis.title.y = element_text(size = 12, face = "bold")
+            ), tooltip = "text")
+       
+  }else{
+    
+         df3 = df1 |> 
+                filter(
+                    (if("special_monitoring" %in% input$tipoPaciente) special_monitoring else TRUE),
+                     (if("readmitted_logical" %in% input$tipoPaciente) readmitted_logical else TRUE),
+                         race %in% input$raza,
+                         age %in% input$edad,
+                         gender %in% input$genero
+                    ) |> 
+                rename(temp = input$vars) |> 
+                drop_na(time_in_hospital, temp) |> 
+                group_by(temp) |> 
+                dplyr::summarise(mean_time = round(mean(time_in_hospital,
+                                                        na.rm = TRUE)),1)
+          
+         p= ggplotly(ggplot(df3, 
+                    aes(x = temp, 
+                        y = mean_time, 
+                        group = 1)) +
+            geom_point(aes(text = paste0(
+                          input$vars, ": ", temp,
+                          "<br>Días ingesado: ", mean_time
+                        )),color = "steelblue", size = 2
+                       ) +
+            geom_smooth(method = "lm", se = TRUE, color = "darkred") +  # se=TRUE adds confidence interval
+            labs(
+                x = input$vars,
+                y = "Media de días ingresado",
+                fill = input$vars
+              ) +
+            theme_minimal()+
+            theme(
+                axis.title.x = element_text(size = 12, face = "bold"),
+                axis.title.y = element_text(size = 12, face = "bold")
+              ), tooltip = "text")
+        
+    
+  }
+  
+  p |> 
+    layout(
+      title = list(
+        text = paste0("Promedio de días ingresado según '", input$vars,"'"),
+        x = 0.5,
+        xanchor = "center",
+        yanchor = "top",
+        font = list(
+                    family = "Arial Black",
+                    size = 20,
+                    color = "black"
+                  )
+      ),
+      margin = list(t = 100)
+    )
+})
+
+
+
+
+# ggplotly(ggscatterstats(df1,time_in_hospital, mean_diagnoses, type = "none"))
+
+```
+
+$$
+~
+$$
+
+# Enlaces de interés
+
+**Fuente**: Los archivos necesarios para ejecutar esta visualización en RStudio se encuentran disponibles en [Github](https://github.com/appropiate/VD_PRII_UOC_2025/tree/main). También se puede acceder directamente a la visualización a través de [shinyapps.io](https://93sxrb-appropiate.shinyapps.io/Carracedo_Huroz_Sergio_VD_UOC_Practica2/). 
+
+**Nota**: Los datos usados para esta visualización no tienen validez real al ser una modificación significativa de la fuente de datos original disponible en la revista donde se publicó el [artículo original](https://onlinelibrary.wiley.com/doi/10.1155/2014/781670) @Diabetes130BRI así como en el 
+[Repositorio de Machine Learning de UC Irvine ](https://archive.ics.uci.edu/dataset/296/diabetes+130-us+hospitals+for+years+1999-2008) @Diabetes130UCI.
+
+# Referencias
+
